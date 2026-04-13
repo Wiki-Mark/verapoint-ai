@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# macOS
+.DS_Store
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project-specific non-code files
+*.pdf
+*.png
+*.webp
+finance/
+*.html
+business_account_saga.md
+Underlease_*.txt
+vipnumbers_*
+whatsapp_screenshots*
+geminis-input*
+
+# Docs (keep in Drive, not in repo)
+BRAIN.md
+SOUL.md
+SETUP.md
+CONCEPT_DOC.md
+VeraPoint_Architecture.md
