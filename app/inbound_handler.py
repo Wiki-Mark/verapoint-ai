@@ -289,6 +289,9 @@ async def incoming_dial(request: Request, lang: str = "en", target: str = "ro"):
 
     logger.info(f"📞 Inbound bridge starting: session={session.session_id}, "
                 f"caller={caller} ({source_lang}) → target={target_number} ({target_lang})")
+    logger.info(f"📞 Leg A WebSocket URL: {ws_url}")
+    logger.info(f"📞 Leg B Webhook URL: {leg_b_webhook}")
+    logger.info(f"📞 TwiML connecting_url: {connecting_url}")
 
     return Response(content=twiml, media_type="text/xml")
 

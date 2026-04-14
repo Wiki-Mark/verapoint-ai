@@ -110,6 +110,18 @@ async def health():
     }
 
 
+@app.get("/debug")
+async def debug_config():
+    """Debug endpoint showing URL configuration."""
+    return {
+        "webhook_base_url": config.webhook_base_url,
+        "ws_base_url": config.ws_base_url,
+        "webhook_base_url_override": config.webhook_base_url_override or "not set",
+        "railway_public_domain": config.railway_public_domain or "not set",
+        "ngrok_url": config.ngrok_url or "not set",
+    }
+
+
 # ─── WebSocket Endpoint for Twilio Media Streams ──────────────────
 # Two separate WebSocket endpoints: one for each leg of the call
 
@@ -119,10 +131,12 @@ async def media_stream_endpoint(websocket: WebSocket, session_id: str, leg: str)
     WebSocket endpoint for Twilio Media Streams.
     
     Twilio connects to:
-      /media-stream/{session_id}/leg_a  (English speaker's audio)
-      /media-stream/{session_id}/leg_b  (Punjabi speaker's audio)
+      /media-stream/{session_id}/leg_a  (source language speaker's audio)
+      /media-stream/{session_id}/leg_b  (target language speaker's audio)
     """
+    logger.info(f"🔌 WebSocket connection attempt: session={session_id}, leg={leg}")
     await handle_media_stream(websocket, session_id, leg)
+    logger.info(f"🔌 WebSocket handler finished: session={session_id}, leg={leg}")
 
 
 
