@@ -62,18 +62,21 @@ async def _inject_audio_to_leg(target_leg_id: str, mulaw_data: bytes, session_id
 
     session = session_manager.get_session(session_id)
     if not session:
+        logger.warning(f"No session found for {session_id} during audio delivery")
         return
 
     leg = session.get_leg(
         LegRole.LEG_A if target_leg_id == "leg_a" else LegRole.LEG_B
     )
     if not leg or not leg.stream_sid:
-        logger.warning(f"No stream SID for {target_leg_id}")
+        logger.warning(f"No stream SID for {target_leg_id} — leg={leg}, stream_sid={leg.stream_sid if leg else 'N/A'}")
         return
 
     # Split audio into Twilio-sized chunks (640 bytes = 80ms at 8kHz µ-law)
     chunks = chunk_audio(mulaw_data, chunk_size=640)
+    logger.info(f"[{session_id}] 🔈 Delivering {len(mulaw_data)} bytes ({len(chunks)} chunks) → {target_leg_id} (stream={leg.stream_sid[:12]}...)")
 
+    sent_count = 0
     for chunk in chunks:
         media_message = {
             "event": "media",
@@ -84,9 +87,12 @@ async def _inject_audio_to_leg(target_leg_id: str, mulaw_data: bytes, session_id
         }
         try:
             await ws.send_text(json.dumps(media_message))
+            sent_count += 1
         except Exception as e:
-            logger.error(f"Error sending audio to {target_leg_id}: {e}")
+            logger.error(f"Error sending audio chunk {sent_count}/{len(chunks)} to {target_leg_id}: {e}")
             return
+
+    logger.info(f"[{session_id}] ✅ Delivered {sent_count}/{len(chunks)} chunks to {target_leg_id}")
 
 
 async def handle_media_stream(
