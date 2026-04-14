@@ -41,9 +41,15 @@ LANGUAGE_OPTIONS = {
     "6": {"code": "ro", "name": "Romanian", "audio": "romanian_confirm"},
 }
 
-# When the caller speaks English, the target defaults to Urdu (most common use case).
-# When the caller speaks another language, the target is English.
-TARGET_LANG = "en"
+# Callee greeting messages — short, in their language, no menu
+CALLEE_GREETINGS = {
+    "en": "You have a translated call via VeraPoint. Please speak naturally.",
+    "hi": "VeraPoint ke zariye ek translated call aa rahi hai. Kripya baat karein.",
+    "ur": "VeraPoint ke zariye ek translated call aa rahi hai. Baat karein.",
+    "pa": "VeraPoint raaheen ik translated call aa rahi hai. Kripya gall karo.",
+    "ar": "Ladayka mukalama mutarjama abra VeraPoint. Tafaddal takallam.",
+    "ro": "Aveți un apel tradus prin VeraPoint. Vă rugăm să vorbiți natural.",
+}
 
 
 def _ivr_url(filename: str) -> str:
@@ -110,7 +116,7 @@ async def incoming_call(request: Request):
 <Response>
     <Play>{greeting_url}</Play>
     <Pause length="1"/>
-    <Gather input="dtmf" numDigits="1" action="/incoming-call/language" method="POST" timeout="10">
+    <Gather input="dtmf" numDigits="1" action="/incoming-call/your-language" method="POST" timeout="10">
         <Play>{menu_url}</Play>
     </Gather>
     <Play>{no_input_url}</Play>
@@ -120,23 +126,21 @@ async def incoming_call(request: Request):
     return Response(content=twiml, media_type="text/xml")
 
 
-# ─── Step 2: Capture Language, Ask for Phone Number ────────────────
+# ─── Step 2: Caller selects THEIR language ─────────────────────────
 
-@router.api_route("/incoming-call/language", methods=["GET", "POST"])
-async def incoming_language_selected(request: Request):
+@router.api_route("/incoming-call/your-language", methods=["GET", "POST"])
+async def incoming_your_language(request: Request):
     """
-    Twilio webhook: called after the caller presses a digit to select language.
-    Confirms the selection and asks for the target phone number.
+    Twilio webhook: called after the caller selects THEIR language.
+    Confirms the selection and asks for the TARGET language.
     """
     form = await request.form()
     digit = form.get("Digits", "")
     caller = form.get("From", "unknown")
-    call_sid = form.get("CallSid", "unknown")
 
     lang_option = LANGUAGE_OPTIONS.get(digit)
 
     if not lang_option:
-        # Invalid selection — loop back
         logger.warning(f"Invalid language selection '{digit}' from {caller}")
         invalid_url = _ivr_url("invalid_selection")
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -146,19 +150,64 @@ async def incoming_language_selected(request: Request):
 </Response>"""
         return Response(content=twiml, media_type="text/xml")
 
-    logger.info(f"📞 {caller} selected language: {lang_option['name']} ({lang_option['code']})")
+    logger.info(f"📞 {caller} speaks: {lang_option['name']} ({lang_option['code']})")
 
     confirm_url = _ivr_url(lang_option["audio"])
-    enter_number_url = _ivr_url("enter_number")
-    no_number_url = _ivr_url("no_number")
+    target_menu_url = _ivr_url("target_language_menu")
+    no_input_url = _ivr_url("no_input")
 
-    # Ask for the phone number they want to call
-    # finishOnKey="#" means the caller presses # after entering the number
+    # Confirm their language, then ask for the OTHER person's language
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Play>{confirm_url}</Play>
     <Pause length="1"/>
-    <Gather input="dtmf" finishOnKey="#" action="/incoming-call/dial?lang={lang_option['code']}" method="POST" timeout="15" numDigits="15">
+    <Gather input="dtmf" numDigits="1" action="/incoming-call/their-language?source={lang_option['code']}" method="POST" timeout="10">
+        <Play>{target_menu_url}</Play>
+    </Gather>
+    <Play>{no_input_url}</Play>
+    <Hangup/>
+</Response>"""
+
+    return Response(content=twiml, media_type="text/xml")
+
+
+# ─── Step 3: Caller selects the OTHER PERSON'S language ────────────
+
+@router.api_route("/incoming-call/their-language", methods=["GET", "POST"])
+async def incoming_their_language(request: Request, source: str = "en"):
+    """
+    Twilio webhook: called after the caller selects the TARGET language.
+    Confirms and asks for the phone number.
+    """
+    form = await request.form()
+    digit = form.get("Digits", "")
+    caller = form.get("From", "unknown")
+
+    target_option = LANGUAGE_OPTIONS.get(digit)
+
+    if not target_option:
+        logger.warning(f"Invalid target language '{digit}' from {caller}")
+        invalid_url = _ivr_url("invalid_selection")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{invalid_url}</Play>
+    <Redirect method="POST">/incoming-call</Redirect>
+</Response>"""
+        return Response(content=twiml, media_type="text/xml")
+
+    logger.info(f"📞 {caller} wants target: {target_option['name']} ({target_option['code']})")
+
+    # Confirm target language
+    confirm_url = _ivr_url(target_option["audio"])
+    enter_number_url = _ivr_url("enter_number")
+    no_number_url = _ivr_url("no_number")
+
+    # Ask for the phone number — pass both source and target langs
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Play>{confirm_url}</Play>
+    <Pause length="1"/>
+    <Gather input="dtmf" finishOnKey="#" action="/incoming-call/dial?lang={source}&amp;target={target_option['code']}" method="POST" timeout="15" numDigits="15">
         <Play>{enter_number_url}</Play>
     </Gather>
     <Play>{no_number_url}</Play>
@@ -168,14 +217,16 @@ async def incoming_language_selected(request: Request):
     return Response(content=twiml, media_type="text/xml")
 
 
-# ─── Step 3: Capture Number, Start Translation Bridge ─────────────
+# ─── Step 4: Capture Number, Start Translation Bridge ─────────────
 
 @router.api_route("/incoming-call/dial", methods=["GET", "POST"])
-async def incoming_dial(request: Request, lang: str = "ur"):
+async def incoming_dial(request: Request, lang: str = "en", target: str = "ro"):
     """
     Twilio webhook: called after the caller enters the target phone number.
     Creates a session, keeps the inbound caller as Leg A,
     and initiates an outbound call to the target (Leg B).
+
+    Both source and target languages are passed as query params.
     """
     form = await request.form()
     digits = form.get("Digits", "")
@@ -194,7 +245,7 @@ async def incoming_dial(request: Request, lang: str = "ur"):
     # Normalize the dialled number to E.164
     target_number = _normalize_uk_number(digits)
     source_lang = lang
-    target_lang = TARGET_LANG
+    target_lang = target
 
     logger.info(f"📞 {caller} wants to call {target_number} ({source_lang} → {target_lang})")
 
@@ -215,22 +266,16 @@ async def incoming_dial(request: Request, lang: str = "ur"):
     ws_url = f"{config.ws_base_url}/media-stream/{session.session_id}/leg_a"
 
     # ─── Call the target (Leg B) in the background ─────────────
-    # We do this AFTER returning TwiML so the inbound caller
-    # gets their media stream started immediately.
     leg_b_webhook = f"{base_url}/call-webhook/{session.session_id}/leg_b"
     leg_b_status = f"{base_url}/call-status/{session.session_id}/leg_b"
 
-    # Store background call info on the session for the background task
     session._inbound_leg_b_target = target_number
     session._inbound_leg_b_webhook = leg_b_webhook
     session._inbound_leg_b_status = leg_b_status
 
-    # Schedule Leg B call initiation after a short delay
-    # (gives Leg A's stream time to connect first)
     asyncio.ensure_future(_initiate_leg_b_for_inbound(session))
 
     # ─── Return TwiML to keep inbound caller on the line ───────
-    # The inbound caller becomes Leg A with a media stream
     connecting_url = _ivr_url("connecting")
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>

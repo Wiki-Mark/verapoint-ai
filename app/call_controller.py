@@ -158,19 +158,17 @@ async def call_webhook(request: Request, session_id: str, leg: str):
         twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Session not found.</Say><Hangup/></Response>'
         return Response(content=twiml, media_type="text/xml")
 
-    # Determine greeting based on language
+    # Determine greeting based on language — callee hears a short message
+    # in their own language, no menu, just "speak naturally"
     call_leg = session.leg_a if leg == "leg_a" else session.leg_b
     language = call_leg.language if call_leg else "en"
+    say_lang = "en-GB"
 
-    if language == "ur":
-        greeting = "VeraPoint Translation Bridge se jure hue hain. Baat karein."
-        say_lang = "en-GB"  # Twilio doesn't have ur for <Say>
-    elif language == "pa":
-        greeting = "VeraPoint Translation Bridge nal jud rahe ho. Kripya bol'o."
-        say_lang = "en-GB"
-    else:
-        greeting = "Connecting to VeraPoint Translation Bridge. Please speak."
-        say_lang = "en-GB"
+    # Import callee greetings from inbound handler
+    from app.inbound_handler import CALLEE_GREETINGS
+    greeting = CALLEE_GREETINGS.get(language,
+        "You have a translated call via VeraPoint. Please speak naturally."
+    )
 
     # Build WebSocket URL for this leg's media stream
     ws_url = f"{config.ws_base_url}/media-stream/{session_id}/{leg}"
