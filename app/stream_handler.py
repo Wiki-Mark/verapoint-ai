@@ -124,6 +124,7 @@ async def handle_media_stream(
 
     # Initialize pipelines when both legs are connected
     stream_sid = None
+    media_packet_count = 0
 
     try:
         async for message in websocket.iter_text():
@@ -175,8 +176,13 @@ async def handle_media_stream(
 
             elif event == "media":
                 # Forward audio to the translation pipeline
+                media_packet_count += 1
                 audio_payload = data["media"]["payload"]
                 mulaw_bytes = base64_to_mulaw(audio_payload)
+
+                # Log every 100th packet to trace audio flow without flooding
+                if media_packet_count % 100 == 1:
+                    logger.info(f"[{session_id}/{leg}] 🔊 Media packet #{media_packet_count}, {len(mulaw_bytes)} bytes")
 
                 pipeline_key = f"pipeline_{leg[-1]}"  # "pipeline_a" or "pipeline_b"
                 pipelines = _active_pipelines.get(session_id, {})
@@ -184,6 +190,8 @@ async def handle_media_stream(
 
                 if pipeline:
                     await pipeline.process_audio(mulaw_bytes)
+                elif media_packet_count <= 5:
+                    logger.warning(f"[{session_id}/{leg}] No pipeline '{pipeline_key}' found — audio dropped (packet #{media_packet_count})")
 
             elif event == "mark":
                 # Twilio mark event — can be used for playback synchronization
@@ -251,7 +259,7 @@ async def _start_pipelines(session_id: str, session):
 
 
 async def _cleanup_leg(session_id: str, leg: str):
-    """Clean up when a call leg disconnects."""
+    """Clean up when a call leg disconnects — also hang up the other leg."""
     logger.info(f"[{session_id}/{leg}] 🧹 Cleaning up leg (WebSocket handler exited)")
 
     # Remove WebSocket
@@ -264,13 +272,29 @@ async def _cleanup_leg(session_id: str, leg: str):
     else:
         logger.warning(f"[{session_id}/{leg}] No WebSocket map found for session during cleanup")
 
-    # If both legs are gone, stop pipelines
+    # ─── CRITICAL: Hang up the OTHER leg when one side disconnects ───
+    session = session_manager.get_session(session_id)
+    if session:
+        other_leg = "leg_b" if leg == "leg_a" else "leg_a"
+        other_call_sid = (
+            session.leg_b_call_sid if leg == "leg_a" else session.leg_a_call_sid
+        )
+        if other_call_sid:
+            try:
+                from app.call_controller import get_twilio_client
+                twilio = get_twilio_client()
+                twilio.calls(other_call_sid).update(status="completed")
+                logger.info(f"[{session_id}] 📞 Hung up {other_leg} (SID: {other_call_sid}) because {leg} disconnected")
+            except Exception as e:
+                logger.warning(f"[{session_id}] Failed to hang up {other_leg}: {e}")
+
+    # Stop pipelines immediately — don't wait for the other leg to clean up
     remaining = _active_websockets.get(session_id, {})
     remaining_legs = list(remaining.keys()) if remaining else []
     logger.info(f"[{session_id}] Remaining active legs: {remaining_legs}")
 
-    if not remaining:
-        await _stop_pipelines(session_id)
+    # Always stop pipelines when ANY leg disconnects (the call is over)
+    await _stop_pipelines(session_id)
 
 
 async def _stop_pipelines(session_id: str):
