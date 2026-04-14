@@ -167,7 +167,11 @@ async def handle_media_stream(
 
                 # If both legs are now connected, start the translation pipelines
                 if session.both_connected():
-                    await _start_pipelines(session_id, session)
+                    try:
+                        await _start_pipelines(session_id, session)
+                    except Exception as e:
+                        logger.error(f"[{session_id}] Pipeline startup failed: {e}", exc_info=True)
+                        # Don't crash the WebSocket — keep the call alive
 
             elif event == "media":
                 # Forward audio to the translation pipeline
@@ -248,14 +252,23 @@ async def _start_pipelines(session_id: str, session):
 
 async def _cleanup_leg(session_id: str, leg: str):
     """Clean up when a call leg disconnects."""
+    logger.info(f"[{session_id}/{leg}] 🧹 Cleaning up leg (WebSocket handler exited)")
+
     # Remove WebSocket
     if session_id in _active_websockets:
+        was_present = leg in _active_websockets[session_id]
         _active_websockets[session_id].pop(leg, None)
         if not _active_websockets[session_id]:
             del _active_websockets[session_id]
+        logger.info(f"[{session_id}/{leg}] WebSocket removed (was_registered={was_present})")
+    else:
+        logger.warning(f"[{session_id}/{leg}] No WebSocket map found for session during cleanup")
 
     # If both legs are gone, stop pipelines
     remaining = _active_websockets.get(session_id, {})
+    remaining_legs = list(remaining.keys()) if remaining else []
+    logger.info(f"[{session_id}] Remaining active legs: {remaining_legs}")
+
     if not remaining:
         await _stop_pipelines(session_id)
 

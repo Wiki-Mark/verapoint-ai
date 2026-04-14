@@ -197,30 +197,52 @@ async def call_status_callback(request: Request, session_id: str, leg: str):
 
     logger.info(f"Call status [{session_id}/{leg}]: {call_status} (SID: {call_sid})")
 
-    if call_status in ("completed", "failed", "busy", "no-answer", "canceled"):
+    # Only act on terminal states — NOT on ringing/initiated/answered
+    terminal_states = ("completed", "failed", "busy", "no-answer", "canceled")
+
+    if call_status in terminal_states:
         session = session_manager.get_session(session_id)
         if session:
             leg_role = LegRole.LEG_A if leg == "leg_a" else LegRole.LEG_B
             call_leg = session.get_leg(leg_role)
             if call_leg:
                 call_leg.connected = False
+                logger.info(f"[{session_id}/{leg}] Marked disconnected (status: {call_status})")
 
-            # If both legs are disconnected, end session
-            if not session.both_connected():
-                # Try to hang up the other leg
-                other_leg = "leg_b" if leg == "leg_a" else "leg_a"
-                other_call_sid = (
-                    session.leg_b_call_sid if leg == "leg_a" else session.leg_a_call_sid
-                )
+            # Check if the OTHER leg is also disconnected before killing it
+            other_leg_name = "leg_b" if leg == "leg_a" else "leg_a"
+            other_role = LegRole.LEG_B if leg == "leg_a" else LegRole.LEG_A
+            other_call_leg = session.get_leg(other_role)
+            other_call_sid = (
+                session.leg_b_call_sid if leg == "leg_a" else session.leg_a_call_sid
+            )
+
+            # Only hang up the other leg if THIS leg genuinely ended
+            # (failed to connect, or caller hung up)
+            if call_status in ("failed", "busy", "no-answer", "canceled"):
+                # The call never connected or was rejected — clean up everything
                 if other_call_sid:
                     try:
                         twilio = get_twilio_client()
                         twilio.calls(other_call_sid).update(status="completed")
-                        logger.info(f"Hung up other leg: {other_call_sid}")
+                        logger.info(f"[{session_id}] Hung up other leg ({other_leg_name}): {other_call_sid}")
                     except Exception as e:
-                        logger.warning(f"Failed to hang up other leg: {e}")
-
+                        logger.warning(f"[{session_id}] Failed to hang up other leg: {e}")
                 session_manager.end_session(session_id)
+
+            elif call_status == "completed":
+                # One side hung up normally — hang up the other side too
+                if other_call_sid:
+                    try:
+                        twilio = get_twilio_client()
+                        twilio.calls(other_call_sid).update(status="completed")
+                        logger.info(f"[{session_id}] Call ended by {leg}, hanging up {other_leg_name}: {other_call_sid}")
+                    except Exception as e:
+                        logger.warning(f"[{session_id}] Failed to hang up other leg: {e}")
+                session_manager.end_session(session_id)
+
+    elif call_status in ("ringing", "initiated", "answered", "in-progress"):
+        logger.info(f"[{session_id}/{leg}] Call progressing: {call_status} — no action needed")
 
     return Response(content="", status_code=200)
 
