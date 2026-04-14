@@ -66,9 +66,21 @@ class DeepgramSTTClient:
 
     def _build_url(self) -> str:
         """Build the Deepgram WebSocket URL with query parameters."""
+        # Map languages to Deepgram-supported codes
+        # Punjabi is not supported by Nova-3 — fallback to Hindi (mutually intelligible)
+        DEEPGRAM_LANG_MAP = {
+            "en": "en",
+            "hi": "hi",
+            "ur": "hi",   # Urdu → Hindi (very similar spoken language)
+            "pa": "hi",   # Punjabi → Hindi (closest supported)
+            "ar": "ar",
+            "ro": "ro",
+        }
+        deepgram_lang = DEEPGRAM_LANG_MAP.get(self.language, "en")
+        
         params = {
             "model": "nova-3",
-            "language": self.language,
+            "language": deepgram_lang,
             "encoding": self.encoding,
             "sample_rate": str(self.sample_rate),
             "channels": str(self.channels),
